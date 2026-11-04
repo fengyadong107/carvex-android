@@ -33,6 +33,7 @@
     <string name="permissions_needed">需要权限</string>
     <string name="permissions_body">请允许附近设备、网络和通知权限，扫描和连接状态才能正常工作。</string>
     <string name="grant_permissions">授予权限</string>
+    <string name="first_run_carwith">已打开 CarWith。请选 CarLife、无线连接，再选车辆热点。</string>
     <string name="just_now">刚刚</string>
     <string name="seconds_ago">%1$d 秒前</string>
     <string name="minutes_ago">%1$d 分钟前</string>

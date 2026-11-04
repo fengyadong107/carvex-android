@@ -35,6 +35,7 @@
     <string name="permissions_needed">Permissions needed</string>
     <string name="permissions_body">Allow nearby device, network and notification access so scanning and connection status work correctly.</string>
     <string name="grant_permissions">Grant permissions</string>
+    <string name="first_run_carwith">CarWith settings are open. Choose CarLife, wireless, then the car hotspot.</string>
     <string name="just_now">just now</string>
     <string name="seconds_ago">%1$d seconds ago</string>
     <string name="minutes_ago">%1$d min ago</string>

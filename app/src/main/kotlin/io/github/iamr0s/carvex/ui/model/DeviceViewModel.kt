@@ -3,10 +3,14 @@ package io.github.iamr0s.carvex.ui.model
 import android.app.Application
 import android.bluetooth.BluetoothAdapter
 import android.content.Context
+import android.content.pm.PackageManager
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import io.github.iamr0s.carvex.FirstRun
+import io.github.iamr0s.carvex.Permissions
 import io.github.iamr0s.carvex.R
 import io.github.iamr0s.carvex.ShizukuBluetoothMac
+import io.github.iamr0s.carvex.sessioncore.BondedDevices
 import io.github.iamr0s.carvex.sessioncore.BridgeStore
 import io.github.iamr0s.carvex.sessioncore.Stage
 import io.github.iamr0s.carvex.sessioncore.ConnectionMode
@@ -27,6 +31,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import rikka.shizuku.Shizuku
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 
@@ -102,6 +107,65 @@ class DeviceViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     // ---------------------------------------------------------------- scan / connect
+
+    private var firstRunFinished = false
+    private var waitingShizuku = false
+    private val shizukuGate: Shizuku.OnRequestPermissionResultListener =
+        Shizuku.OnRequestPermissionResultListener { request, result ->
+        if (request != ShizukuBluetoothMac.REQUEST_CODE) return@OnRequestPermissionResultListener
+        runCatching { Shizuku.removeRequestPermissionResultListener(shizukuGate) }
+        viewModelScope.launch {
+            if (result == PackageManager.PERMISSION_GRANTED) {
+                withContext(Dispatchers.IO) { ShizukuBluetoothMac.read() }?.let { updatePhoneMac(it) }
+            }
+            openCarWithAndFinish()
+        }
+    }
+
+    /** After the install-time dialogs. Runs once. */
+    fun finishFirstRun() {
+        if (firstRunFinished || waitingShizuku || !FirstRun.pending(appContext)) return
+        viewModelScope.launch {
+            if (ShizukuBluetoothMac.needed(BridgeStore.options.value.phoneMac) && ShizukuBluetoothMac.granted()) {
+                withContext(Dispatchers.IO) { ShizukuBluetoothMac.read() }?.let { updatePhoneMac(it) }
+            }
+            if (!BridgeStore.options.value.experiment) {
+                BridgeStore.configure(BridgeStore.options.value.copy(experiment = true))
+                BridgeStore.log("ui", "first-run experimental auth enabled for CarPlay media audio")
+            }
+            if (BridgeStore.options.value.target.isBlank() && Permissions.granted(appContext)) {
+                val car = withContext(Dispatchers.IO) { FirstRun.soleCar(BondedDevices.list(appContext)) }
+                if (car != null) {
+                    BridgeStore.configure(BridgeStore.options.value.copy(target = car.address))
+                    BridgeStore.log("ui", "first-run car ${car.name} ${car.address}")
+                }
+            }
+            val macNeeded = ShizukuBluetoothMac.needed(BridgeStore.options.value.phoneMac)
+            if (macNeeded && ShizukuBluetoothMac.available() && !ShizukuBluetoothMac.granted()) {
+                waitingShizuku = true
+                val requested = withContext(Dispatchers.Main.immediate) {
+                    runCatching {
+                        Shizuku.addRequestPermissionResultListener(shizukuGate)
+                        ShizukuBluetoothMac.request()
+                    }.getOrDefault(false)
+                }
+                if (requested) return@launch
+                waitingShizuku = false
+                runCatching { Shizuku.removeRequestPermissionResultListener(shizukuGate) }
+            }
+            openCarWithAndFinish()
+        }
+    }
+
+    private fun openCarWithAndFinish() {
+        if (firstRunFinished) return
+        firstRunFinished = true
+        waitingShizuku = false
+        val opened = FirstRun.openCarWith(appContext)
+        FirstRun.markDone(appContext)
+        if (opened) say(appContext.getString(R.string.first_run_carwith))
+        refresh()
+    }
 
     fun refresh() {
         if (_state.value.scanning) return
@@ -375,5 +439,10 @@ class DeviceViewModel(app: Application) : AndroidViewModel(app) {
                 open = true,
             ),
         )
+    }
+
+    override fun onCleared() {
+        runCatching { Shizuku.removeRequestPermissionResultListener(shizukuGate) }
+        super.onCleared()
     }
 }

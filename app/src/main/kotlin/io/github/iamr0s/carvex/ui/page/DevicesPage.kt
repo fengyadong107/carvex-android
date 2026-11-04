@@ -55,6 +55,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import io.github.iamr0s.carvex.BuildConfig
+import io.github.iamr0s.carvex.FirstRun
 import io.github.iamr0s.carvex.sessioncore.Stage
 import io.github.iamr0s.carvex.Permissions
 import io.github.iamr0s.carvex.R
@@ -89,6 +90,7 @@ fun DevicesPage(
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
     ) { permissionRevision++ }
+    FirstRunEffect(vm)
 
     val now = rememberNow()
     val connecting = state.link as? Link.Connecting
@@ -383,6 +385,31 @@ private fun DeviceRow(
                     color = cs.onSurfaceVariant,
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun FirstRunEffect(vm: DeviceViewModel) {
+    val context = LocalContext.current
+    val pending = remember { FirstRun.pending(context) }
+    val permissions = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) { vm.finishFirstRun() }
+    val uninstall = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) {
+        val missing = Permissions.missing(context) + Permissions.optionalMissing(context)
+        if (missing.isNotEmpty()) permissions.launch(Permissions.requested())
+        else vm.finishFirstRun()
+    }
+    LaunchedEffect(pending) {
+        if (!pending) return@LaunchedEffect
+        if (FirstRun.officialInstalled(context)) uninstall.launch(FirstRun.uninstallOfficial())
+        else {
+            val missing = Permissions.missing(context) + Permissions.optionalMissing(context)
+            if (missing.isNotEmpty()) permissions.launch(Permissions.requested())
+            else vm.finishFirstRun()
         }
     }
 }
