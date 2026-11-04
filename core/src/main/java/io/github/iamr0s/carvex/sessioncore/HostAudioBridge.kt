@@ -47,13 +47,40 @@ class HostAudioBridge(private val log:(String)->Unit,private val configureRoute:
     private val queues=(1..3).associateWith{Channel<Block>(8)}
     /** Host-side per-category activity: 1 is treated as active because the source is observed to stop during 0. */
     private val hostActive=(1..3).associateWith{AtomicBoolean(true)}
+    private val silenceAnnounced=AtomicBoolean(false)
     @Volatile private var host:CastHost?=null
     fun bindHost(value:CastHost){check(!closed.get());host=value}
     private fun remove(binding:Binding){
         active.updateAndGet{routes->routes.filterValues{it!==binding}}
         runCatching{binding.transport.close()}
     }
-    init{for((category,queue) in queues)scope.launch{
+    init{
+        // ponytail: one 100ms tick, category 1 only. CarPToCarL: a CarPlay receiver drops
+        // the first real music if the stream stays silent after SETUP. Stop when host pauses.
+        scope.launch{
+            var primed:Binding?=null
+            var readyAt=0L
+            while(isActive&&!closed.get()){
+                delay(100)
+                val binding=active.get()[1]
+                if(binding==null||!binding.transport.ready||hostActive[1]?.get()!=true){
+                    primed=null;silenceAnnounced.set(false);continue
+                }
+                if(primed!==binding){primed=binding;readyAt=System.nanoTime();silenceAnnounced.set(false)}
+                val last=lastPcmNanos.get(1)
+                val now=System.nanoTime()
+                if((if(last==0L)now-readyAt else now-last)<300_000_000L)continue
+                val format=binding.formats[1]?:continue
+                val bytes=(format.rate/50).coerceAtLeast(1)*format.channels*2
+                if(!format.accepts(bytes))continue
+                if(silenceAnnounced.compareAndSet(false,true))
+                    log("Audio category=1 idle>300ms; silence keepalive so the CarPlay stream is not judged idle")
+                val pcm=ByteArray(bytes)
+                val queue=queues.getValue(1)
+                repeat(4){if(queue.trySend(Block(pcm,format,binding,System.nanoTime())).isFailure)return@repeat}
+            }
+        }
+        for((category,queue) in queues)scope.launch{
         var converter:Pcm16Converter?=null
         var previous:Binding?=null
         var lastArrival:Long?=null

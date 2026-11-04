@@ -129,6 +129,7 @@ class SessionController(
         val startAudio=AtomicReference<((Int,ByteArray,PcmFormat)->Boolean)?>(null)
         /** Siri/语音开始时按需建立 type100/speechRecognition（含麦克风输入）；固件没有启动预建。 */
         val startSpeech=AtomicReference<(() -> Boolean)?>(null)
+        val micListenerAttached=AtomicBoolean(false)
         val observedAudio=ConcurrentHashMap.newKeySet<String>()
         val audio=r.own(HostAudioBridge(log={BridgeStore.log(id,it)}));audioBridge=audio
         val audioDemand=r.own(AudioDemandGate())
@@ -209,6 +210,13 @@ class SessionController(
                 when(name){
                     "host-display"->BridgeStore.update(id){it.copy(hostDisplay=value)}
                     "touch-listener"->BridgeStore.update(id){it.copy(touch=value==1)}
+                    "microphone-listener"->{
+                        micListenerAttached.set(value==1)
+                        if(value==1){
+                            val started=startSpeech.get()?.invoke()==true
+                            BridgeStore.log(id,"CarWith mic listener attached; speech input setup requested="+started)
+                        }
+                    }
                     "host-binder-died","host-disconnected","host-binding-died","host-destroy","host-null-binding","host-bind-error"->failure(java.io.IOException(name))
                 }
             }
@@ -306,13 +314,14 @@ class SessionController(
                 }
             }
             override fun musicSampleRate():Int?=audio.musicSampleRate()
-            // Advertised capability alone cannot deliver microphone PCM to the host.
+            // CarWith asks before the speech stream exists. Advertised car input is enough
+            // to choose the vehicle mic; the listener callback opens the stream.
             override fun vehicleMicrophoneReady():Boolean{
                 val hostMic=host?.capabilities()?.microphone==true
                 val protocolMic=protocol.capabilities.microphone
                 val carInput=activeAir?.microphoneInputAvailable()==true
                 val inputReady=audio.microphoneReady()
-                val ready=hostMic&&protocolMic&&carInput&&inputReady
+                val ready=hostMic&&protocolMic&&(carInput||inputReady)
                 if(!micQueryLogged){micQueryLogged=true
                     BridgeStore.log(id,"CarWith mic query: host="+hostMic+" protocol="+protocolMic+
                         " carInput="+carInput+" inputReady="+inputReady+" -> "+ready)}
@@ -916,6 +925,7 @@ class SessionController(
                 }
                 startAudio.set{category,pcm,format->requestAudio(category,pcm,format)}
                 startSpeech.set{requestAudio(3,byteArrayOf(),PcmFormat(24000,1),prime=true)}
+                if(micListenerAttached.get())startSpeech.get()?.invoke()
                 BridgeStore.update(id){it.copy(audioStatus="音频通道 ${audio.categories().sorted()} 已建立 · 发声待实测")}
             }
             // A receiver may legitimately expose only audio/control. In that mode no video

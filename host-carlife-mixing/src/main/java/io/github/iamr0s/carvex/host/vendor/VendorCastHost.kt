@@ -147,7 +147,7 @@ class VendorCastHost(
                     events.fps(intent.getIntExtra("carlife_frame", 0)); null
                 }
                 "carlife_vr_hu_wake_up_enable" -> Bundle().apply {
-                    putBoolean("hu_wake_up_enable", false)
+                    putBoolean("hu_wake_up_enable", events.vehicleMicrophoneReady())
                 }
                 "carlife_vr_use_phone_mic" -> Bundle().apply {
                     putBoolean("is_use_phone_mic", !(microphone != null && events.vehicleMicrophoneReady()))

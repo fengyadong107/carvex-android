@@ -179,6 +179,28 @@ class HostAudioBridgeTest {
             assertEquals(2L,bridge.snapshot().dropped)
         }finally{bridge.close()}
     }
+    @Test fun mediaSilenceKeepsTheStreamWarmUntilRealPcm():Unit=runBlocking {
+        val format=PcmFormat(48000,2)
+        val got=kotlinx.coroutines.channels.Channel<ByteArray>(8)
+        val stream=object:NegotiatedAudioTransport {
+            @Volatile var closed=false
+            override val ready get()=!closed
+            override val formats=mapOf(1 to format)
+            override val microphoneFormat:PcmFormat?=null
+            override suspend fun send(category:Int,pcm:ByteArray,format:PcmFormat){got.send(pcm.copyOf())}
+            override fun close(){closed=true;got.cancel()}
+        }
+        val bridge=HostAudioBridge({},configureRoute={})
+        try{
+            bridge.attach(stream)
+            val silence=withTimeout(2000){got.receive()}
+            assertTrue(silence.isNotEmpty()&&silence.all{it==0.toByte()})
+            bridge.receive(ByteArray(960){1},1,format)
+            var frame=silence
+            withTimeout(2000){while(frame.all{it==0.toByte()})frame=got.receive()}
+            assertTrue(frame.any{it!=0.toByte()})
+        }finally{bridge.close()}
+    }
     @Test fun pauseDiagnosticsSeparateSourceStateFromReceiverPlayback():Unit=runBlocking {
         val logs=java.util.concurrent.CopyOnWriteArrayList<String>()
         val bridge=HostAudioBridge({logs+=it},configureRoute={})
