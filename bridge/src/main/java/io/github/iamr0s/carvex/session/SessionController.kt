@@ -39,7 +39,7 @@ class SessionController(
     private val localContent:LocalVideoContentFactory?=null,
     /** 由 `:app` 注入的宿主编排工厂；编排层不再认识任何具体宿主模块。 */
     private val hostFactory:(Context,HostCallbacks)->CastHost,
-    /** 由 `:app` 注入的协议栈；编排层只按它声明的能力决策，不认识具体协议实现。 */
+    /** 由 `:app` 注入。能力在这里用，连接过程在协议模块。 */
     private val protocol:ProtocolStack) : CastSession {
     private val scope=CoroutineScope(SupervisorJob()+Dispatchers.Main.immediate)
     private var job:Job?=null
@@ -520,7 +520,7 @@ class SessionController(
                     BridgeStore.log(id,"CarWith audio route requested immediately after host binding; preferred source PCM=48000 Hz; actual callback format remains authoritative")
                 }
             }else BridgeStore.log(id,"Session not started by CarWith; the app-owned display keeps the encoder surface")
-        // A 方案：CarPlay 的握手与会话构造收进 :protocol-carplay；媒体仍由本类驱动。
+        // 握手在 CarPlayRunner；这里只把宿主的画面和音频接到会话上。
         val carPlayHost=object:CarPlayHost{
             override fun log(message:String)=BridgeStore.log(id,message)
             override fun touch(sample:TouchSample):Boolean=synchronized(touchLock){
@@ -568,113 +568,21 @@ class SessionController(
             override fun warn(message:String){BridgeStore.update(id){s->s.copy(warning=BridgeStore.redact(message))}}
         }
         val runner=CarPlayRunner(context,o,r,carPlayHost)
-            val bt=phase(Stage.BLUETOOTH,90000){runner.openBluetooth()}
-            val pendingSourceEof=AtomicReference<Throwable?>(null)
-            val sourceFailure=AtomicReference<(Throwable)->Unit>({error->
-                if(generateSequence(error){it.cause}.any{it is java.io.EOFException})pendingSourceEof.compareAndSet(null,error)
-                else failure(error)
-            })
-            val link=r.own(IapLink(bt.inputStream,bt.outputStream,{BridgeStore.log(id,it)},{sourceFailure.get().invoke(it)}))
-            phase(Stage.DETECT,25000){link.start(allowDirectSyn=true)}
-            val identity=PairStore(context).identity()
-            val networkHandoff=r.own(IapNetworkHandoff(link.generation,link.linkEpoch,o.experiment,
-                {attemptJob.isActive&&!ended.get()&&!failed.isCompleted&&
-                    link.negotiatedControlSession!=null},
-                {BridgeStore.log(id,it)}))
-            // The selected control schema owns the transaction order. Authentication failure
-            // never retries another order or reuses the same socket's security state.
-            var bootstrap=phase(Stage.AUTH,90000){
-                runner.negotiate(link,o.phoneMac,o.carPlayName,identity,lastBootstrap,
-                    experimentalIntegrityOnly=o.experiment,
-                    networkHandoff=networkHandoff,
-                    onNowPlayingCommand={command,fields->
-                        // 发布器在 AirSession 建好后才有；先暂存订阅，建立后由 AirSession 取走。
-                        NowPlayingUpdate.pendingSubscription=if(command==NowPlayingUpdate.START)fields else null
-                        true
-                    })
-            }
-            val sourceAuthentication=requireNotNull(bootstrap.authentication)
-            val sourceBinding=SecurityBinding(sourceAuthentication.generation,id,sourceAuthentication.epoch)
-            val sourceIdentification=bootstrap.identification
-            r.own(AutoCloseable{sourceIdentification?.invalidate()})
-            val sourceContextCurrent=AtomicBoolean(true)
-            r.own(link.bindEpoch(sourceBinding.epoch){
-                sourceContextCurrent.set(false)
-                sourceIdentification?.invalidate()
-                failure(SecurityFailure(SecurityDiagnostic("iAP2","source-link-restart",SecurityReason.STALE_CONTEXT)))
-            })
-            if(!sourceContextCurrent.get())securityFailure(SecurityReason.STALE_CONTEXT,phase="source-link-restart")
-            networkHandoff.acceptBootstrap(bootstrap)
-            lastBootstrap=bootstrap
-            val handoff=HandoffSupervisor()
-            val sourceRef=HandoffSupervisor.ResourceRef(id+"-bt",1,link.linkEpoch)
-            val targetRef=HandoffSupervisor.ResourceRef(id+"-airplay",1)
-            val leaseRef=HandoffSupervisor.ResourceRef(id+"-network",1)
-            // A session-local correlation token follows the chosen endpoint pipeline. Pair/AA still
-            // verifies the actual peer; this token is not a claimed authenticated device identity.
-            val peerCandidate=id
-            handoff.arm(sourceRef,targetRef,peerCandidate,leaseRef,System.nanoTime()+150_000_000_000L,
-                requiresTargetIap=false) // This wireless schema treats runtime iAP as optional.
-            val cutoverTimer=timer.schedule({
-                val snapshot=handoff.checkDeadline()
-                if(snapshot.state==HandoffSupervisor.State.HANDOFF_FAILED)
-                    failure(TransportException(TransportErrorCategory.HANDOFF_FAILED,TransportErrorCategory.HANDOFF_FAILED.name))
-            },150000,TimeUnit.MILLISECONDS)
-            r.own(AutoCloseable{cutoverTimer.cancel(false)})
-            sourceFailure.set{error->
-                val detached=handoff.snapshot.sourceDetached
-                val eof=generateSequence(error){it.cause}.any{it is java.io.EOFException}
-                if(detached||eof){
-                    val snapshot=handoff.sourceDetach(sourceRef)
-                    // Publish detachment before invalidating the handler: a concurrent
-                    // consumer must not turn a stale identity callback into a fatal
-                    // non-EOF source failure while the handoff is still in progress.
-                    sourceIdentification?.invalidate()
-                    if(snapshot.state==HandoffSupervisor.State.HANDOFF_FAILED)failure(error)
-                    else {
-                        if(!detached)BridgeStore.log(id,"Bluetooth source detached during explicit handoff; target readiness remains independent")
-                        r.release(link);r.release(bt)
-                    }
-                }else failure(error)
-            }
-            pendingSourceEof.getAndSet(null)?.let{sourceFailure.get().invoke(it)}
-            launch {
-                fun checkSourceLink(){
-                    check(sourceContextCurrent.get()&&link.generation==sourceBinding.generation&&
-                        link.linkEpoch==sourceBinding.epoch){"Post-bootstrap iAP link changed"}
-                    // poll owns terminal errors and preserves their cause (notably EOF,
-                    // which the handoff supervisor may classify as source detachment).
-                }
-                try{while(isActive){
-                    if(handoff.snapshot.sourceDetached)break
-                    checkSourceLink()
-                    val command=link.poll()
-                    if(handoff.snapshot.sourceDetached)break
-                    checkSourceLink()
-                    command?.let{
-                    val fields=it.fields
-                    when{
-                        sourceIdentification?.handle(it,link.generation,link.linkEpoch){message->BridgeStore.log(id,message)}==true->Unit
-                        networkHandoff.handle(it,link.generation,link.linkEpoch)->Unit
-                        fields!=null->BridgeStore.log(id,"Unsupported post-bootstrap Bluetooth iAP command "+it.id.toString(16))
-                        // lingo 载荷不再是异常，也不丢弃：记录 id 与解析出的 lingo/command 后继续。
-                        else->{val lingo=(it as IapCommand.Lingo).message;BridgeStore.log(id,"Post-bootstrap iAP lingo message id="+it.id.toString(16)+" lingo="+lingo.lingo+" command="+lingo.command.toString(16)+"; answer not implemented, recorded and continuing")}
-                    }
-                }}}
-                catch(t:Exception){if(isActive&&!ended.get())sourceFailure.get().invoke(t)}
-            }
-            val networkReady=runner.prepareNetwork(bootstrap,networkHandoff){configuration->
-                phase(Stage.WIFI,45000){runner.openNetwork(configuration,::failure)}
-            }
-            val network=networkReady.network
-            bootstrap=networkReady.bootstrap
-            lastBootstrap=bootstrap
-
-
-            val air=runner.openSession(network,bootstrap,sourceBinding,VideoEncoder.supportedFps(),
-                {sourceContextCurrent.get()&&!ended.get()&&!failed.isCompleted&&
-                    link.linkEpoch==sourceBinding.epoch&&link.generation==sourceBinding.generation},
-                controlPublication=networkReady.publication)
+            val brought=runner.bringUp(
+                sessionId=id,
+                deadlines=timer,
+                scope=sessionScope,
+                phase=object:SessionPhase{
+                    override suspend fun <T> run(stage:Stage,millis:Long,block:suspend ()->T)=phase(stage,millis,block)
+                },
+                attemptActive={attemptJob.isActive},
+                sessionEnded={ended.get()},
+                failed=failed,
+                previousBootstrap=lastBootstrap,
+                onBootstrap={lastBootstrap=it},
+                localFps=VideoEncoder.supportedFps(),
+            )
+            val air=brought.session
             activeAir=air
             // Publication precedes this check: disconnect either captures this
             // AirSession, or prevents its preparation after an earlier null snapshot.
@@ -696,9 +604,7 @@ class SessionController(
             val screen=phase(Stage.PAIR,90000){air.prepare{
                 if(!ended.get())BridgeStore.update(id){it.copy(stage=Stage.SETUP,detail=Stage.SETUP.title,error=null)}
             }}
-            handoff.targetAttach(targetRef,peerCandidate)
-            check(handoff.airplayReady(targetRef).committed)
-            cutoverTimer.cancel(false)
+            brought.commitHandoff()
 
             receiverAudio.set(air.receiverAudio)
             BridgeStore.update(id){it.copy(receiverAudioEntries=air.receiverAudio.size)}
@@ -834,7 +740,7 @@ class SessionController(
                         encoderLock.lock()
                         try{
                             if(!ended.get()){
-                                if(video?.setBitrate(requested)==true){bitrate=requested;BridgeStore.log(id,"Bitrate queued="+requested)}
+                                if(video.setBitrate(requested)){bitrate=requested;BridgeStore.log(id,"Bitrate queued="+requested)}
                                 else BridgeStore.log(id,"Bitrate not applied: encoder unavailable or unsupported")
                             }
                         }finally{encoderLock.unlock()}
@@ -853,7 +759,7 @@ class SessionController(
                             val bounded=caps.maxFps?.let{minOf(requested,it)}?:requested
                             val target=supported(hostWidth,hostHeight,bounded.coerceIn(1,limit))
                             if(target==null||target==currentFps)return@launch
-                            val encoder=video?:return@launch
+                            val encoder=video
                             if(encoder.setFrameRate(target)){
                                 currentFps=target
                                 BridgeStore.update(id){it.copy(targetFps=target)}
