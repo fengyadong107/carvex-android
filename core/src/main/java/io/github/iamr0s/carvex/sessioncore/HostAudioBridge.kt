@@ -60,6 +60,7 @@ class HostAudioBridge(private val log:(String)->Unit,private val configureRoute:
         scope.launch{
             var primed:Binding?=null
             var readyAt=0L
+            var silence:ByteArray?=null
             while(isActive&&!closed.get()){
                 delay(100)
                 val binding=active.get()[1]
@@ -75,7 +76,7 @@ class HostAudioBridge(private val log:(String)->Unit,private val configureRoute:
                 if(!format.accepts(bytes))continue
                 if(silenceAnnounced.compareAndSet(false,true))
                     log("Audio category=1 idle>300ms; silence keepalive so the CarPlay stream is not judged idle")
-                val pcm=ByteArray(bytes)
+                val pcm=silence?.takeIf{it.size==bytes}?:ByteArray(bytes).also{silence=it}
                 val queue=queues.getValue(1)
                 repeat(4){if(queue.trySend(Block(pcm,format,binding,System.nanoTime())).isFailure)return@repeat}
             }
@@ -233,15 +234,10 @@ class HostAudioBridge(private val log:(String)->Unit,private val configureRoute:
         routeLock.lock()
         try{
             val independent=micReceiver.get()
-            val binding=microphoneBinding()
             if(closed.get()||!format.accepts(pcm.size))return false
-            if(independent!=null&&independent.first.ready&&independent.second==format){
-                val accepted=host?.microphone(pcm,format.rate,format.channels,format.encoding)==true
-                if(accepted)microphoneBytes.addAndGet(pcm.size.toLong())
-                return accepted
-            }
-            val receiver=binding?:return false
-            if(receiver.mic!=format)return false
+            val matched=(independent!=null&&independent.first.ready&&independent.second==format)
+                || microphoneBinding()?.mic==format
+            if(!matched)return false
             val accepted=host?.microphone(pcm,format.rate,format.channels,format.encoding)==true
             if(accepted)microphoneBytes.addAndGet(pcm.size.toLong())
             return accepted
