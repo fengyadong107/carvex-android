@@ -255,4 +255,29 @@ class NetworkHandoffTest {
             f.current=false;f.discovery()}).open(f.initial);fail("stale endpoint committed")}
         catch(expected:IllegalStateException){}
     }}
+
+    /** 昨天的顺序：5703 已经收下，蓝牙读回 -1。交接不能退休，热点路径还要继续找车机地址。 */
+    @Test(timeout=5000) fun bluetoothCloseAfterCredentialsStillJoinsHotspot() {runBlocking {
+        val f=Fixture(false)
+        var controlLive=true
+        var sessionFailed=false
+        val credentialsReady=true
+        fun refresh(){f.current=handoffContextCurrent(true,false,sessionFailed,controlLive,credentialsReady)}
+        refresh()
+        val discovered=f.discovery()
+        val result=NetworkHandoffPipeline(f.handoff,
+            join={
+                val closed=IOException("bt socket closed, read return: -1")
+                if(bluetoothPeerClosed(closed)&&credentialsReady)controlLive=false
+                else sessionFailed=true
+                refresh()
+                "network"
+            },
+            publish={"publication"},
+            discover={_,_->discovered}).open(f.initial)
+        assertFalse(sessionFailed)
+        assertEquals("publication",result.publication)
+        assertEquals(8765,result.bootstrap.port)
+        assertSame(f.identity,result.bootstrap.identification)
+    }}
 }
