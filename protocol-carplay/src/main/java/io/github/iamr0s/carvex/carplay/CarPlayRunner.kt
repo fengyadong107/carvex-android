@@ -47,6 +47,16 @@ internal fun bluetoothPeerClosed(error: Throwable): Boolean =
                     message.contains("bt socket closed") || message.contains("socket might closed")
             } == true
     }
+
+/** 热点信息已经收下之后，蓝牙链路拆掉也不再作废这次交接。 */
+internal fun handoffContextCurrent(
+    attemptActive: Boolean,
+    sessionEnded: Boolean,
+    failed: Boolean,
+    controlSessionLive: Boolean,
+    credentialsReady: Boolean,
+): Boolean = attemptActive && !sessionEnded && !failed && (controlSessionLive || credentialsReady)
+
 interface CarPlayHost {
     fun log(message: String)
     fun touch(sample: TouchSample): Boolean
@@ -173,8 +183,10 @@ class CarPlayRunner(
         val link=resources.own(IapLink(bt.inputStream,bt.outputStream,{host.log(it)},{sourceFailure.get().invoke(it)}))
         phase.run(Stage.DETECT,25000){link.start(allowDirectSyn=true)}
         val identity=PairStore(context).identity()
+        val credentialsReady=AtomicBoolean(false)
         val networkHandoff=resources.own(IapNetworkHandoff(link.generation,link.linkEpoch,options.experiment,
-            {attemptActive()&&!sessionEnded()&&!failed.isCompleted&&link.negotiatedControlSession!=null},
+            {handoffContextCurrent(attemptActive(),sessionEnded(),failed.isCompleted,
+                link.negotiatedControlSession!=null,credentialsReady.get())},
             host::log))
         // The selected control schema owns the transaction order. Authentication failure
         // never retries another order or reuses the same socket's security state.
@@ -200,6 +212,7 @@ class CarPlayRunner(
         })
         if(!sourceContextCurrent.get())securityFailure(SecurityReason.STALE_CONTEXT,phase="source-link-restart")
         networkHandoff.acceptBootstrap(bootstrap)
+        credentialsReady.set(true)
         onBootstrap(bootstrap)
         val handoff=HandoffSupervisor()
         val sourceRef=HandoffSupervisor.ResourceRef(sessionId+"-bt",1,link.linkEpoch)
@@ -221,12 +234,11 @@ class CarPlayRunner(
             val eof=bluetoothPeerClosed(error)
             if(detached||eof){
                 val snapshot=handoff.sourceDetach(sourceRef)
-                // Publish detachment before invalidating the handler: a concurrent
-                // consumer must not turn a stale identity callback into a fatal
-                // non-EOF source failure while the handoff is still in progress.
-                sourceIdentification?.invalidate()
-                if(snapshot.state==HandoffSupervisor.State.HANDOFF_FAILED)host.failure(error)
-                else {
+                // 身份还要留给后面的热点和 AirPlay 校验。这里作废的话，蓝牙一断交接就退休。
+                if(snapshot.state==HandoffSupervisor.State.HANDOFF_FAILED){
+                    sourceIdentification?.invalidate()
+                    host.failure(error)
+                }else {
                     if(!detached)host.log("Bluetooth source detached during explicit handoff; target readiness remains independent")
                     resources.release(link);resources.release(bt)
                 }

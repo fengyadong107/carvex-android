@@ -15,4 +15,10 @@ class BluetoothPeerClosedTest {
         assertFalse(bluetoothPeerClosed(java.io.IOException("Wi-Fi request unavailable")))
         assertFalse(bluetoothPeerClosed(IllegalStateException("Post-bootstrap iAP link changed")))
     }
+
+    @Test fun acceptedCredentialsKeepHandoffAliveAfterBluetoothDrops() {
+        assertTrue(handoffContextCurrent(true, false, false, controlSessionLive = false, credentialsReady = true))
+        assertFalse(handoffContextCurrent(true, false, false, controlSessionLive = false, credentialsReady = false))
+        assertFalse(handoffContextCurrent(true, false, true, controlSessionLive = false, credentialsReady = true))
+    }
 }
