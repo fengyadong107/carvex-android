@@ -39,6 +39,10 @@ object FirstRun {
         return runCatching { context.startActivity(launch.addFlags(flags)) }.isSuccess
     }
 
+    /** 只有一台经典或双模车机时才自动选。BLE 和类型不明的不猜。 */
     fun soleCar(devices: List<BondedDevices.Device>): BondedDevices.Device? =
-        devices.filter { it.kind == BondedDevices.Kind.CAR }.singleOrNull()
+        devices.filter {
+            it.kind == BondedDevices.Kind.CAR &&
+                (it.transport == BondedDevices.Transport.CLASSIC || it.transport == BondedDevices.Transport.DUAL)
+        }.singleOrNull()
 }

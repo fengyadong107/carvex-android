@@ -129,16 +129,20 @@ class DeviceViewModel(app: Application) : AndroidViewModel(app) {
             if (ShizukuBluetoothMac.needed(BridgeStore.options.value.phoneMac) && ShizukuBluetoothMac.granted()) {
                 withContext(Dispatchers.IO) { ShizukuBluetoothMac.read() }?.let { updatePhoneMac(it) }
             }
-            if (!BridgeStore.options.value.experiment) {
-                BridgeStore.configure(BridgeStore.options.value.copy(experiment = true))
-                BridgeStore.log("ui", "first-run experimental auth enabled for CarPlay media audio")
-            }
-            if (BridgeStore.options.value.target.isBlank() && Permissions.granted(appContext)) {
-                val car = withContext(Dispatchers.IO) { FirstRun.soleCar(BondedDevices.list(appContext)) }
-                if (car != null) {
-                    BridgeStore.configure(BridgeStore.options.value.copy(target = car.address))
+            val car = if (BridgeStore.options.value.target.isBlank() && Permissions.granted(appContext))
+                withContext(Dispatchers.IO) { FirstRun.soleCar(BondedDevices.list(appContext)) } else null
+            val current = BridgeStore.options.value
+            val next = current.copy(
+                experiment = true,
+                target = if (current.target.isBlank() && car != null) car.address else current.target,
+            )
+            if (next != current) {
+                BridgeStore.configure(next)
+                if (!current.experiment)
+                    BridgeStore.log("ui", "first-run experimental auth enabled for CarPlay media audio")
+                if (car != null && current.target.isBlank())
                     BridgeStore.log("ui", "first-run car ${car.name} ${car.address}")
-                }
+                _state.update { it.copy(settings = it.settings.copy(experimentalAuth = true)) }
             }
             val macNeeded = ShizukuBluetoothMac.needed(BridgeStore.options.value.phoneMac)
             if (macNeeded && ShizukuBluetoothMac.available() && !ShizukuBluetoothMac.granted()) {

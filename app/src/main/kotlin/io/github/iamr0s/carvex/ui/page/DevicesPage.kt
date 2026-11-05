@@ -396,20 +396,17 @@ private fun FirstRunEffect(vm: DeviceViewModel) {
     val permissions = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
     ) { vm.finishFirstRun() }
-    val uninstall = rememberLauncherForActivityResult(
-        ActivityResultContracts.StartActivityForResult(),
-    ) {
+    fun proceed() {
         val missing = Permissions.missing(context) + Permissions.optionalMissing(context)
         if (missing.isNotEmpty()) permissions.launch(Permissions.requested())
         else vm.finishFirstRun()
     }
+    val uninstall = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) { proceed() }
     LaunchedEffect(pending) {
         if (!pending) return@LaunchedEffect
         if (FirstRun.officialInstalled(context)) uninstall.launch(FirstRun.uninstallOfficial())
-        else {
-            val missing = Permissions.missing(context) + Permissions.optionalMissing(context)
-            if (missing.isNotEmpty()) permissions.launch(Permissions.requested())
-            else vm.finishFirstRun()
-        }
+        else proceed()
     }
 }

@@ -55,7 +55,7 @@ object BondedDevices {
                         ?.uppercase() ?: return@mapNotNull null
                     // 名字可能为空（少数车机不广播名称）；用地址兜底，避免列表出现空行。
                     val name = device.name?.takeIf { it.isNotBlank() } ?: address
-                    Device(name, address, kind(device))
+                    Device(name, address, kind(device), transport(device))
                 }
                 // 车机排在耳机/音箱前面：这一屏的目的是连车，不是管理音频配件。
                 .sortedWith(compareBy({ if (it.kind == Kind.CAR) 0 else 1 }, { it.name.lowercase() }))
@@ -64,7 +64,15 @@ object BondedDevices {
 
     enum class Kind { CAR, AUDIO, PHONE, OTHER }
 
-    data class Device(val name: String, val address: String, val kind: Kind)
+    /** 经典/双模才能走 CarPlay 的 RFCOMM。只走 BLE 的配件不能当自动连接目标。 */
+    enum class Transport { CLASSIC, LE, DUAL, UNKNOWN }
+
+    data class Device(
+        val name: String,
+        val address: String,
+        val kind: Kind,
+        val transport: Transport = Transport.UNKNOWN,
+    )
 
     /**
      * 从 BluetoothClass 判断类别。
@@ -83,4 +91,13 @@ object BondedDevices {
             else -> Kind.CAR
         }
     }.getOrDefault(Kind.CAR)
+
+    private fun transport(device: BluetoothDevice): Transport = runCatching {
+        when (device.type) {
+            BluetoothDevice.DEVICE_TYPE_CLASSIC -> Transport.CLASSIC
+            BluetoothDevice.DEVICE_TYPE_LE -> Transport.LE
+            BluetoothDevice.DEVICE_TYPE_DUAL -> Transport.DUAL
+            else -> Transport.UNKNOWN
+        }
+    }.getOrDefault(Transport.UNKNOWN)
 }
