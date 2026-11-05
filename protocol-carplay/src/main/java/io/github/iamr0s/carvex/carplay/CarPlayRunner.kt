@@ -177,11 +177,18 @@ class CarPlayRunner(
         val bt=phase.run(Stage.BLUETOOTH,90000){openBluetooth()}
         val pendingSourceEof=AtomicReference<Throwable?>(null)
         val sourceFailure=AtomicReference<(Throwable)->Unit>({error->
-            if(generateSequence(error){it.cause}.any{it is java.io.EOFException})pendingSourceEof.compareAndSet(null,error)
+            if(bluetoothPeerClosed(error))pendingSourceEof.compareAndSet(null,error)
             else host.failure(error)
         })
         val link=resources.own(IapLink(bt.inputStream,bt.outputStream,{host.log(it)},{sourceFailure.get().invoke(it)}))
-        phase.run(Stage.DETECT,25000){link.start(allowDirectSyn=true)}
+        phase.run(Stage.DETECT,25000){
+            try{link.start(allowDirectSyn=true)}
+            catch(t:Exception){
+                // 对端连上就关：下一次对这个车机只监听，把唯一能走 iAP 的方向让出来。
+                if(bluetoothPeerClosed(t))Bootstrap.markPreferInbound(options.target)
+                throw t
+            }
+        }
         val identity=PairStore(context).identity()
         val credentialsReady=AtomicBoolean(false)
         val networkHandoff=resources.own(IapNetworkHandoff(link.generation,link.linkEpoch,options.experiment,
@@ -206,13 +213,15 @@ class CarPlayRunner(
         resources.own(AutoCloseable{sourceIdentification?.invalidate()})
         val sourceContextCurrent=AtomicBoolean(true)
         resources.own(link.bindEpoch(sourceBinding.epoch){
-            sourceContextCurrent.set(false)
-            sourceIdentification?.invalidate()
-            host.failure(SecurityFailure(SecurityDiagnostic("iAP2","source-link-restart",SecurityReason.STALE_CONTEXT)))
+            // 凭证已经收下时，车机重发 Detection 只是收尾方式，不是 stale 上下文。
+            if(!credentialsReady.get()){
+                sourceContextCurrent.set(false)
+                sourceIdentification?.invalidate()
+                host.failure(SecurityFailure(SecurityDiagnostic("iAP2","source-link-restart",SecurityReason.STALE_CONTEXT)))
+            }
         })
         if(!sourceContextCurrent.get())securityFailure(SecurityReason.STALE_CONTEXT,phase="source-link-restart")
         networkHandoff.acceptBootstrap(bootstrap)
-        credentialsReady.set(true)
         onBootstrap(bootstrap)
         val handoff=HandoffSupervisor()
         val sourceRef=HandoffSupervisor.ResourceRef(sessionId+"-bt",1,link.linkEpoch)
@@ -232,7 +241,8 @@ class CarPlayRunner(
         sourceFailure.set{error->
             val detached=handoff.snapshot.sourceDetached
             val eof=bluetoothPeerClosed(error)
-            if(detached||eof){
+            // 凭证在手时，握手后的非 EOF 链路终止（看门狗、NO_SYN）也只是蓝牙收尾。
+            if(detached||eof||(credentialsReady.get()&&error is java.io.IOException)){
                 val snapshot=handoff.sourceDetach(sourceRef)
                 // 身份还要留给后面的热点和 AirPlay 校验。这里作废的话，蓝牙一断交接就退休。
                 if(snapshot.state==HandoffSupervisor.State.HANDOFF_FAILED){
@@ -244,6 +254,8 @@ class CarPlayRunner(
                 }
             }else host.failure(error)
         }
+        // 先装好交接后的 failure 分流，再宣告凭证就绪，避免中间那一瞬走回旧 handler。
+        credentialsReady.set(true)
         pendingSourceEof.getAndSet(null)?.let{sourceFailure.get().invoke(it)}
         scope.launch {
             fun checkSourceLink(){

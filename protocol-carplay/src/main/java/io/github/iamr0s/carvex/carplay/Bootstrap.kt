@@ -115,6 +115,10 @@ object Bootstrap {
     private const val MAX_BOOTSTRAP_LINK_RESTARTS=2
     private class BootstrapLinkRestart(cause:Throwable?=null):IllegalStateException(
         "iAP link changed during bootstrap",cause)
+    /** 这个目标上次 outbound 连上后被对端立即关闭：之后只监听，等车机自己发起。 */
+    @Volatile private var preferInboundTarget:String?=null
+    private fun preferInboundFor(address:String)=preferInboundTarget==address
+    internal fun markPreferInbound(address:String){preferInboundTarget=address}
     @SuppressLint("MissingPermission")
     fun devices(context:Context):List<Device> {
         val adapter=context.getSystemService(BluetoothManager::class.java).adapter?:return emptyList()
@@ -129,7 +133,8 @@ object Bootstrap {
         fun trace(direction:String,transaction:String,outcome:String,detail:String?=null)=
             log(ProtocolTrace.event("BLUETOOTH","RFCOMM",direction,transaction,outcome,detail))
         val bonded=device.bondState==BluetoothDevice.BOND_BONDED
-        val servicePlan=WiapBluetoothPolicy.plan(device.uuids?.map{it.uuid},o.listen)
+        val listenOnly=o.listen||preferInboundFor(o.target)
+        val servicePlan=WiapBluetoothPolicy.plan(device.uuids?.map{it.uuid},listenOnly)
         log("Bluetooth target paired="+bonded+" uuidSource=platform_cache observation="+servicePlan.observation+
             " uuidCount="+servicePlan.cachedUuidCount+" freshness=unverified fullSdp=unavailable")
         return coroutineScope {
@@ -148,7 +153,7 @@ object Bootstrap {
             val outboundCandidates=servicePlan.outbound
             // UUID 列表没有 attribute4/channel 结果，不能套用苹果的精确 fallback 条件。
             // 候选只串行探测一次；保持既有超时与选中 socket 机制，方向仲裁另批处理。
-            log("RFCOMM outbound policy=sdk_uuid_hint_probe listenOnly="+o.listen+
+            log("RFCOMM outbound policy=sdk_uuid_hint_probe listenOnly="+listenOnly+
                 " candidates="+outboundCandidates.map{it.service.outboundLabel+":"+it.basis})
             val winner=CompletableDeferred<BluetoothSocket>()
             val winnerSocket=java.util.concurrent.atomic.AtomicReference<BluetoothSocket?>(null)
