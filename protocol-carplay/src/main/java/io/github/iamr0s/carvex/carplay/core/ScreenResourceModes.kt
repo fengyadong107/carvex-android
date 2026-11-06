@@ -1,5 +1,8 @@
 package io.github.iamr0s.carvex.carplay.core
 
+/** 接收端声明里「nice to have」的 transferPriority 与「anytime」的各类 constraint 都取这个值。 */
+private const val UNCONDITIONAL=100
+
 /** Capability-driven subset for MainScreen(1) and MainAudio(2). Unknown constraints remain rejected. */
 class ScreenResourceModes {
     data class State(val owner:Int=1,val permanent:Int=1,val borrowed:Boolean=false,
@@ -19,8 +22,11 @@ class ScreenResourceModes {
         val requests=params["resources"] as? List<*>?:return null
         if(requests.size!=1)return null
         val r=requests.single() as? Map<*,*>?:return null
-        if(r.keys!=setOf("resourceID","transferType"))return null
+        // 接收端在 /info 的 modes 里用一组约束声明资源能力，回 changeModes 时会原样带上这几个字段。
+        // 无条件那一档放行；带条件的请求当前不评估，交回拒绝。
+        if(r.keys.any{it !in setOf("resourceID","transferType","transferPriority","takeConstraint","borrowConstraint","unborrowConstraint")})return null
         fun integer(v:Any?):Int? {val n=v as? Number?:return null;val d=n.toDouble();if(!d.isFinite()||d!=n.toInt().toDouble())return null;return n.toInt()}
+        if(listOf("transferPriority","takeConstraint","borrowConstraint","unborrowConstraint").any{r.containsKey(it)&&integer(r[it])!=UNCONDITIONAL})return null
         val resource=integer(r["resourceID"])?:return null;val transfer=integer(r["transferType"])?:return null
         if(resource==1)return when(transfer){
             1->if(state.borrowed)null else state.copy(owner=2,permanent=2,borrowed=false)

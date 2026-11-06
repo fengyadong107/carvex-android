@@ -18,14 +18,22 @@ class ScreenResourceModesTest {
         m.commit(requireNotNull(m.propose(request(2))))
         assertEquals(ScreenResourceModes.State(),m.state)
     }
-    @Test fun unrecoveredConditionsAndOtherResourcesDoNotMutateState(){
+    @Test fun conditionalConstraintsAndBorrowIdStillRejected(){
         val m=ScreenResourceModes()
-        for(key in listOf("transferPriority","takeConstraint","borrowConstraint","unborrowConstraint","borrowID"))
+        // 100 是无条件那一档，别的值代表请求带条件，当前实现不评估。
+        for(key in listOf("transferPriority","takeConstraint","borrowConstraint","unborrowConstraint"))
             assertNull(m.propose(request(1,mapOf(key to 1))))
+        assertNull(m.propose(request(1,mapOf("borrowID" to 1))))
         assertNotNull(m.propose(mapOf("resources" to listOf(mapOf("resourceID" to 2,"transferType" to 1)))))
         assertNull(m.propose(request(1)+mapOf("appStates" to listOf(mapOf("appStateID" to 1,"state" to 1)))))
         assertNull(m.propose(mapOf("resources" to listOf(mapOf("resourceID" to 1,"transferType" to 1.5)))))
         assertEquals(ScreenResourceModes.State(),m.state)
+    }
+    @Test fun receiverConstraintDeclarationIsAccepted(){
+        val m=ScreenResourceModes()
+        // DiPlay 的 /info 声明原样回带：nice-to-have 与 anytime 都是 100。
+        val declaration=mapOf("transferPriority" to 100,"takeConstraint" to 100,"borrowConstraint" to 100,"unborrowConstraint" to 100)
+        assertEquals(ScreenResourceModes.State(2,1,true),m.propose(request(3,declaration)))
     }
     @Test fun statusOnlyChangeModesReplyIsNotSentAgain(){
         assertNull(modesChangedNotification(mapOf("status" to 1)))

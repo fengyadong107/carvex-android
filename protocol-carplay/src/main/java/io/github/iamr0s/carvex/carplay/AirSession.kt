@@ -833,7 +833,15 @@ class AirSession(private val context:Context,private val path:NetworkPath,privat
             it.key.toString()+"="+when(value){
                 is ByteArray->"bytes["+value.size+"]"
                 is Map<*,*>->summarize(value)
-                is List<*>->"list["+value.size+"]"
+                // 列表元素多是协议里的资源描述（changeModes 的 resources/appStates），
+                // 只打长度会把决定成败的字段一起吞掉，这里逐个展开。
+                is List<*>->"list["+value.size+"]"+value.joinToString("",prefix=":",postfix=""){v->
+                    when(v){
+                        is Map<*,*>->summarize(v)
+                        is ByteArray->"bytes["+v.size+"]"
+                        else->v.toString().take(64)
+                    }
+                }
                 else->value.toString().take(64)
             }
         }
