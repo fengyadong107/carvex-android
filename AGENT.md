@@ -209,6 +209,5 @@ adb shell ip route
   README（中英）。
 - 本仓库 README 不承载完整协议规范。工作区存在时，链接到对应研究 docset。
 - 工作区存在时，持久架构决策写入 `../docs/decisions/NNNN-title.md`。
-- `assets/donation/` 存放 README 使用的三张图片；`app/src/main/assets/` 存放应用内
-  由 `LocalVideoDisplay.kt`（`DonationCodes`）加载的副本。两处必须保持一致。改名或删除
-  必须同步更新两个目录和所有 README。捐赠不得成为功能门槛、影响构建或影响诊断。
+- `assets/donation/` 存放 README 使用的三张图片。改名或删除必须同步更新所有 README。
+  捐赠不得成为功能门槛、影响构建或影响诊断。

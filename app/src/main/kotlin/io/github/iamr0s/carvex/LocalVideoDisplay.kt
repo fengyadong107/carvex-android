@@ -35,6 +35,7 @@ import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import io.github.iamr0s.carvex.sessioncore.BridgeStore
+import io.github.iamr0s.carvex.sessioncore.progressText
 import io.github.iamr0s.carvex.session.LocalVideoContent
 import io.github.iamr0s.carvex.session.LocalVideoContentFactory
 import io.github.iamr0s.carvex.session.LocalVideoPhase
@@ -187,7 +188,7 @@ private class BridgePresentation(context:Context,display:Display,private val bra
             Spacer(Modifier.height(16.dp))
             Text(caption,color=Color.White.copy(alpha=.72f),fontSize=22.sp)
             Spacer(Modifier.height(28.dp))
-            Text(state.detail.ifBlank{state.stage.title},color=Color.White,fontSize=28.sp)
+            Text(state.progressText,color=Color.White,fontSize=28.sp)
         }
     }
 }
@@ -202,7 +203,10 @@ private class BridgePresentation(context:Context,display:Display,private val bra
             Text(name,color=Color.White,fontSize=30.sp,fontWeight=FontWeight.Bold)
             Text("未检测到 CarWith 宿主 · 当前显示本机投屏页",color=Color.White.copy(alpha=.72f),fontSize=15.sp)
             Text(state.stage.title,color=Color.White.copy(alpha=.9f),fontSize=18.sp)
-            Text(state.detail,color=Color.White.copy(alpha=.72f),fontSize=16.sp)
+            // 多数阶段 detail 就是 stage.title，再画一遍等于把同一句状态说两次。
+            state.progressText.takeIf{it!=state.stage.title}?.let{
+                Text(it,color=Color.White.copy(alpha=.72f),fontSize=16.sp)
+            }
         }
     }
 }

@@ -226,7 +226,6 @@ Field-test rules:
   research docset when the workspace is present.
 - Durable architecture decisions belong in `../docs/decisions/NNNN-title.md` when the
   workspace exists.
-- `assets/donation/` holds the three images used by the READMEs; `app/src/main/assets/`
-  holds the app copies loaded by `LocalVideoDisplay.kt` (`DonationCodes`). Keep both sets
-  identical. Renaming an image requires updating both folders and every README. Donations
-  must never gate a feature, change a build, or affect diagnostics.
+- `assets/donation/` holds the three images used by the READMEs. Renaming an image requires
+  updating every README. Donations must never gate a feature, change a build, or affect
+  diagnostics.
