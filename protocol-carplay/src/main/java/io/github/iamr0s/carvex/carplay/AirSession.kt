@@ -185,7 +185,10 @@ class AirSession(private val context:Context,private val path:NetworkPath,privat
         scope.launch{
             try{for(notification in modeOutput){
                 val control=client?:error("Modes before control session")
-                control.plist("POST","/command",notification)
+                try{control.plist("POST","/command",notification)}
+                catch(t:RtspClient.StatusException){
+                    log("modesChanged rejected status="+t.status+"; video session retained")
+                }
             }}catch(t:Exception){if(isActive)channelFailure("modes-writer",t)}
         }
         scope.launch{
@@ -841,7 +844,7 @@ class AirSession(private val context:Context,private val path:NetworkPath,privat
         val command=Plist.dictionary(request.body)
         if(command["type"]!="changeModes")return
         val reply=Plist.dictionary(body)
-        val notification=mapOf("type" to "modesChanged","params" to reply["params"])
+        val notification=modesChangedNotification(reply)?:return
         if(modeOutput.trySend(notification).isFailure)throw IOException("Modes notification queue unavailable")
     }
     private fun event(r:RtspMessage,replays:SiriRequests=controlSiri):Pair<Int,ByteArray> =
@@ -873,7 +876,10 @@ class AirSession(private val context:Context,private val path:NetworkPath,privat
         return synchronized(commandLock){when(p["type"]){
             "changeModes"->{
                 val params=p["params"] as? Map<*,*>?:return 400 to byteArrayOf()
-                val proposed=screenModes.propose(params)?:return 200 to Plist.encode(mapOf("status" to 1))
+                val proposed=screenModes.propose(params)?:run{
+                    log("changeModes not applied; constraints or shape not recognized")
+                    return 200 to Plist.encode(mapOf("status" to 1))
+                }
                 val resource=screenModes.requestedResource(params)?:return 400 to byteArrayOf()
                 if(resource==1&&screenOwnership?.invoke(proposed.owner==1)!=true)return 200 to Plist.encode(mapOf("status" to 1))
                 screenModes.commit(proposed)

@@ -47,3 +47,9 @@ class ScreenResourceModes {
         "appStates" to listOf(mapOf("appStateID" to 1,"entity" to 0,"speechMode" to -1),mapOf("appStateID" to 2,"entity" to 0),mapOf("appStateID" to 3,"entity" to 0))
     )
 }
+
+/** status-only 的拒绝没有 params。再发一条空的 modesChanged，接收端会回 422。 */
+fun modesChangedNotification(reply:Map<*,*>):Map<String,Any?>? {
+    val params=reply["params"] as? Map<*,*>?:return null
+    return mapOf("type" to "modesChanged","params" to params)
+}

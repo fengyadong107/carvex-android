@@ -27,6 +27,11 @@ class ScreenResourceModesTest {
         assertNull(m.propose(mapOf("resources" to listOf(mapOf("resourceID" to 1,"transferType" to 1.5)))))
         assertEquals(ScreenResourceModes.State(),m.state)
     }
+    @Test fun statusOnlyChangeModesReplyIsNotSentAgain(){
+        assertNull(modesChangedNotification(mapOf("status" to 1)))
+        val params=ScreenResourceModes().params()
+        assertEquals(params,modesChangedNotification(mapOf("status" to 0,"params" to params))?.get("params"))
+    }
     @Test fun postReplyHookRunsAfterEventResponseWasWritten(){
         val inbound=ByteArrayOutputStream()
         RtspWire.write(inbound,"POST /command RTSP/1.0",mapOf("CSeq" to "9"),Plist.encode(mapOf("type" to "changeModes")))
