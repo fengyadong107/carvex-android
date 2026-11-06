@@ -1,7 +1,6 @@
 package io.github.iamr0s.carvex
 import android.app.Presentation
 import android.content.Context
-import android.graphics.BitmapFactory
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.os.Bundle
@@ -11,7 +10,6 @@ import android.view.Display
 import android.view.MotionEvent
 import android.view.Surface
 import android.view.ViewGroup
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.Text
@@ -20,10 +18,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.ComposeView
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -182,15 +177,17 @@ private class BridgePresentation(context:Context,display:Display,private val bra
 }
 
 @Composable private fun BrandPage(name:String,caption:String){
+    val state by BridgeStore.state.collectAsState()
     Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFF0D1830),Color(0xFF2A4D8F))))){
         Column(
-            Modifier.fillMaxSize().padding(24.dp),
-            horizontalAlignment=Alignment.CenterHorizontally,verticalArrangement=Arrangement.spacedBy(12.dp)
+            Modifier.fillMaxSize().padding(48.dp),
+            horizontalAlignment=Alignment.CenterHorizontally,verticalArrangement=Arrangement.Center
         ){
-            Text(name,color=Color.White,fontSize=34.sp,fontWeight=FontWeight.Bold)
-            Text(caption,color=Color.White.copy(alpha=.72f),fontSize=16.sp)
-            // 余下的空间全给二维码：车机上扫得清楚比画面好看重要。
-            DonationCodes(Modifier.weight(1f).fillMaxWidth())
+            Text(name,color=Color.White,fontSize=42.sp,fontWeight=FontWeight.Bold)
+            Spacer(Modifier.height(16.dp))
+            Text(caption,color=Color.White.copy(alpha=.72f),fontSize=22.sp)
+            Spacer(Modifier.height(28.dp))
+            Text(state.detail.ifBlank{state.stage.title},color=Color.White,fontSize=28.sp)
         }
     }
 }
@@ -205,53 +202,7 @@ private class BridgePresentation(context:Context,display:Display,private val bra
             Text(name,color=Color.White,fontSize=30.sp,fontWeight=FontWeight.Bold)
             Text("未检测到 CarWith 宿主 · 当前显示本机投屏页",color=Color.White.copy(alpha=.72f),fontSize=15.sp)
             Text(state.stage.title,color=Color.White.copy(alpha=.9f),fontSize=18.sp)
-            DonationCodes(Modifier.weight(1f).fillMaxWidth())
-        }
-    }
-}
-
-/** 作者的三张捐赠码。
- *
- * 直接贴在画面底色上，不套底板也不裁圆角：这三张图各自都带品牌底色，加一层壳只会让二维码变小。
- * 排布按画面比例定——横屏摆三列、竖屏摆三行，每一格都让图按自身比例尽量撑满；三张图的宽高比本来
- * 就不一样，靠 ContentScale.Fit 各自适配，不强行拉成同一形状。
- *
- * 解码结果记在 remember 里：这块画面会被反复重绘（静止时每秒一次心跳），每次重组都重新解三张
- * JPG 会白占主线程。缺哪张就跳过哪张。 */
-@Composable private fun DonationCodes(modifier:Modifier=Modifier){
-    val context=LocalContext.current
-    val codes=remember{
-        listOf("alipay.jpg" to "支付宝","binance.jpg" to "Binance","wxpay.jpg" to "微信")
-            .mapNotNull{(asset,label)->
-                runCatching{BitmapFactory.decodeStream(context.assets.open(asset))?.asImageBitmap()}
-                    .getOrNull()?.let{it to label}
-            }
-    }
-    if(codes.isEmpty())return
-    BoxWithConstraints(modifier){
-        // 竖屏里三张并排会窄到扫不出来，所以按画面比例换一种摆法。
-        if(maxWidth>maxHeight){
-            Row(
-                Modifier.fillMaxSize(),
-                horizontalArrangement=Arrangement.spacedBy(12.dp),
-                verticalAlignment=Alignment.CenterVertically
-            ){
-                codes.forEach{(image,label)->
-                    Image(bitmap=image,contentDescription=label,contentScale=ContentScale.Fit,
-                        modifier=Modifier.weight(1f).fillMaxHeight())
-                }
-            }
-        }else{
-            Column(
-                Modifier.fillMaxSize(),
-                verticalArrangement=Arrangement.spacedBy(12.dp),
-                horizontalAlignment=Alignment.CenterHorizontally
-            ){
-                codes.forEach{(image,label)->
-                    Image(bitmap=image,contentDescription=label,contentScale=ContentScale.Fit,
-                        modifier=Modifier.weight(1f).fillMaxWidth())
-                }
-            }
+            Text(state.detail,color=Color.White.copy(alpha=.72f),fontSize=16.sp)
         }
     }
 }
