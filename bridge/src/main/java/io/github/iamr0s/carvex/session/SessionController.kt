@@ -513,13 +513,21 @@ class SessionController(
             }
         })
         try{
-            if(fromHost){
+            // 宿主桥接与 fromHost 无关：surface() 只要求 service 绑定成功，不要求 CarLife 会话先建立
+            // （VendorCastHost.surface 的 check 只有 bound）。fromHost 只说明这次是谁拉起的，
+            // 它决定不了 CarWith 能不能往编码 Surface 上渲染。
+            val hostBound:Boolean=try{
                 phase(Stage.HOST,12000){
                     h.bind()
-                    h.selectCarLifePlusAudio()
-                    BridgeStore.log(id,"CarWith audio route requested immediately after host binding; preferred source PCM=48000 Hz; actual callback format remains authoritative")
+                    if(fromHost)h.selectCarLifePlusAudio()
                 }
-            }else BridgeStore.log(id,"Session not started by CarWith; the app-owned display keeps the encoder surface")
+                BridgeStore.log(id,"CarWith host bound; the host owns the encoder surface")
+                true
+            }catch(t:Exception){
+                BridgeStore.log(id,"CarWith host unavailable: "+t.javaClass.simpleName+" "+(t.message?:""))
+                false
+            }
+            if(!hostBound&&!fromHost)BridgeStore.log(id,"No CarWith host; the app-owned display keeps the encoder surface")
         // 握手在 CarPlayRunner；这里只把宿主的画面和音频接到会话上。
         val carPlayHost=object:CarPlayHost{
             override fun log(message:String)=BridgeStore.log(id,message)
@@ -681,7 +689,9 @@ class SessionController(
                 }},stopSend={air.closeVideo()},
                     // Opt-in latency trade: the front surface is the only way a still CarWith picture
                     // gets a P frame, and it costs a blit per frame plus a few frames of latency.
-                    frontSurface=o.frontSurface&&fromHost)
+                    // 宿主接手后画面不再自己重绘，只有前表面那条路能让静止画面继续出 P 帧；
+                    // 以前它跟着 fromHost 走，宿主绑定放开后这里也必须跟上，否则 CarWith 一静止车机就黑屏。
+                    frontSurface=hostBound)
                 val v=r.own(makeEncoder(fps));video=v
                 BridgeStore.log(id,"${"AVC selected name="}${v.encoderName}${" hardware="}${v.hardwareAccelerated}${" size="}${hostWidth}${"x"}${hostHeight}${" fps="}${fps}${" bitrate="}${v.initialBitrate}")
                 BridgeStore.update(id){it.copy(width=hostWidth,height=hostHeight,targetFps=fps,maxFps=limit,targetBitrate=v.initialBitrate)}
@@ -700,7 +710,7 @@ class SessionController(
                     local.show(LocalVideoPhase.SPLASH)
                     BridgeStore.log(id,"${"Splash page shown for "}${SPLASH_MILLIS}${"ms; hostExpected="}${fromHost}")
                     delay(SPLASH_MILLIS)
-                    if(fromHost)runCatching{local.close()}
+                    if(hostBound)runCatching{local.close()}
                     else{
                         // No host takes the surface, so the app-owned page stays for the whole session.
                         r.own(local);local.show(LocalVideoPhase.SCREEN)
@@ -710,12 +720,12 @@ class SessionController(
                         // alive while it stays still - and it never needed a front surface for that.
                         v.repeatFrame={local.heartbeat()}
                     }
-                }else if(!fromHost){
+                }else if(!hostBound){
                     // Neither a host nor an app-owned display: nothing can ever produce a frame, so
                     // report the real reason now instead of waiting for the first-frame deadline.
                     error("本地画面不可用：无法创建私有虚拟屏，请查看日志中的 Local display unavailable")
                 }
-                if(fromHost){
+                if(hostBound){
                     // The host renders into whatever surface it is handed and never repaints on its own,
                     // so it renders into the encoder's front surface: that is the only way a still host
                     // picture gets back into the encoder.

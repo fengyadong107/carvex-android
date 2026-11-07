@@ -99,6 +99,11 @@ class ReceiverDiscovery(context:Context,private val path:NetworkPath,private val
             override fun onServiceResolved(info:NsdServiceInfo){
                 if(closed.get()||info.serviceName in lost){next();return}
                 try{
+                    // Same hotspot often has a Mac AirPlay receiver; first-wins used to PAIR that host (403).
+                    if(!ReceiverBonjourPreference.shouldAccept(info.serviceName)){
+                        log("Bonjour candidate skipped (consumer AirPlay host) name="+info.serviceName)
+                        return
+                    }
                     val hosts=if(Build.VERSION.SDK_INT>=34)info.hostAddresses else listOfNotNull(info.host)
                     val direct=bootstrap.endpoint
                     val scopedNetwork=Build.VERSION.SDK_INT>=33&&info.network==path.network

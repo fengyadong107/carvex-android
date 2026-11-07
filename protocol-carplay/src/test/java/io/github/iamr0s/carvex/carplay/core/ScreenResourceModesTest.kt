@@ -20,14 +20,21 @@ class ScreenResourceModesTest {
     }
     @Test fun conditionalConstraintsAndBorrowIdStillRejected(){
         val m=ScreenResourceModes()
-        // 100 是无条件那一档，别的值代表请求带条件，当前实现不评估。
+        // 借用/归还要评估条件：100 是无条件那一档，别的值交回拒绝。
         for(key in listOf("transferPriority","takeConstraint","borrowConstraint","unborrowConstraint"))
-            assertNull(m.propose(request(1,mapOf(key to 1))))
-        assertNull(m.propose(request(1,mapOf("borrowID" to 1))))
+            assertNull(m.propose(request(3,mapOf(key to 1))))
+        assertNull(m.propose(request(3,mapOf("borrowID" to 1))))
         assertNotNull(m.propose(mapOf("resources" to listOf(mapOf("resourceID" to 2,"transferType" to 1)))))
         assertNull(m.propose(request(1)+mapOf("appStates" to listOf(mapOf("appStateID" to 1,"state" to 1)))))
         assertNull(m.propose(mapOf("resources" to listOf(mapOf("resourceID" to 1,"transferType" to 1.5)))))
         assertEquals(ScreenResourceModes.State(),m.state)
+    }
+    @Test fun takeWithHighPriorityConstraintsIsAccepted(){
+        val m=ScreenResourceModes()
+        // 实车报文：主音频 TAKE，transferPriority/takeConstraint=500。无条件转移不看约束。
+        val request=mapOf("resources" to listOf(mapOf("resourceID" to 2,"transferType" to 1,
+            "transferPriority" to 500,"takeConstraint" to 500,"borrowConstraint" to 100)))
+        assertEquals(ScreenResourceModes.State(),m.propose(request))
     }
     @Test fun receiverConstraintDeclarationIsAccepted(){
         val m=ScreenResourceModes()

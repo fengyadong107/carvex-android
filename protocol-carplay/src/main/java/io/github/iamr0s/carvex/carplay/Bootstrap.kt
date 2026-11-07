@@ -133,8 +133,15 @@ object Bootstrap {
         fun trace(direction:String,transaction:String,outcome:String,detail:String?=null)=
             log(ProtocolTrace.event("BLUETOOTH","RFCOMM",direction,transaction,outcome,detail))
         val bonded=device.bondState==BluetoothDevice.BOND_BONDED
-        val listenOnly=o.listen||preferInboundFor(o.target)
-        val servicePlan=WiapBluetoothPolicy.plan(device.uuids?.map{it.uuid},listenOnly)
+        // 对端（如 Mac AllPlay）缓存里没有 WiAP UUID 时，出站探测只会干扰 ACL/RFCOMM，
+        // 应只做手机侧监听，等车机/接收端来连。
+        val cachedUuids=device.uuids?.map{it.uuid}
+        val preview=WiapBluetoothPolicy.plan(cachedUuids,listenOnly=false)
+        val listenOnly=o.listen||preferInboundFor(o.target)||
+            preview.observation==WiapBluetoothPolicy.CacheObservation.NO_WIAP_HINT||
+            preview.observation==WiapBluetoothPolicy.CacheObservation.EMPTY||
+            preview.observation==WiapBluetoothPolicy.CacheObservation.UNAVAILABLE
+        val servicePlan=WiapBluetoothPolicy.plan(cachedUuids,listenOnly)
         log("Bluetooth target paired="+bonded+" uuidSource=platform_cache observation="+servicePlan.observation+
             " uuidCount="+servicePlan.cachedUuidCount+" freshness=unverified fullSdp=unavailable")
         return coroutineScope {
@@ -142,6 +149,10 @@ object Bootstrap {
             // 公共 SDK 的两个 listener 仍是独立 channel，也不能自定义 SDP profile 属性。
             log("RFCOMM localRole=PHONE_WIAP sdpTopology=independent_channels "+
                 "customProfileDescriptor=unavailable preAcceptAdmission=unavailable")
+            fun rfcommChannel(server:android.bluetooth.BluetoothServerSocket):Int?=runCatching{
+                val f=server.javaClass.getDeclaredField("mChannel").apply{isAccessible=true}
+                f.getInt(server)
+            }.getOrNull()
             val listeners=WiapBluetoothPolicy.openPhoneListeners{service->
                 try{
                     r.own(adapter.listenUsingRfcommWithServiceRecord(service.serviceName,service.localUuid))
@@ -150,6 +161,9 @@ object Bootstrap {
                     log("Inbound RFCOMM "+service.inboundLabel+" registration unavailable: "+(t.message?:""));null
                 }
             }.map{it.service.inboundLabel to it.socket}
+            listeners.forEach{(label,server)->
+                log("RFCOMM inbound "+label+" channel="+ (rfcommChannel(server)?.toString()?:"unknown"))
+            }
             val outboundCandidates=servicePlan.outbound
             // UUID 列表没有 attribute4/channel 结果，不能套用苹果的精确 fallback 条件。
             // 候选只串行探测一次；保持既有超时与选中 socket 机制，方向仲裁另批处理。
@@ -188,11 +202,13 @@ object Bootstrap {
             val workers=mutableListOf<Job>()
             try{
                 if(listeners.isNotEmpty()){
+                    // Mac AllPlay 常要先 SDP 失败再扫信道，60s 不够；给足入站窗口。
+                    val inboundWaitMs=180_000L
                     log("RFCOMM local listener API calls succeeded="+listeners.map{it.first}+
-                        "; SDP publication unverified; selected-peer wait deadline=60s")
+                        "; SDP publication unverified; selected-peer wait deadline="+(inboundWaitMs/1000)+"s")
                     listeners.forEach{(direction,server)->
                         workers+=launch(Dispatchers.IO){
-                            val until=android.os.SystemClock.elapsedRealtime()+60_000
+                            val until=android.os.SystemClock.elapsedRealtime()+inboundWaitMs
                             try{
                                 while(isActive&&!stopping.get()&&!winner.isCompleted){
                                     val left=until-android.os.SystemClock.elapsedRealtime()
@@ -1009,10 +1025,25 @@ object Bootstrap {
             val active=cm.activeNetwork
             val caps=active?.let{cm.getNetworkCapabilities(it)}
             if(active!=null&&caps!=null&&caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)){
-                val current=(caps.transportInfo as? android.net.wifi.WifiInfo)?.ssid?.trim('"')
+                fun normalizeSsid(raw:String?):String?{
+                    val s=raw?.trim()?.trim('"')?:return null
+                    return s.takeIf{it.isNotEmpty()&&!it.equals("<unknown ssid>",ignoreCase=true)}
+                }
+                // transportInfo 在缺定位权限时常拿不到 SSID；WifiManager 仍可读当前连接。
+                val fromCaps=normalizeSsid((caps.transportInfo as? android.net.wifi.WifiInfo)?.ssid)
+                val fromManager=normalizeSsid(
+                    context.applicationContext.getSystemService(android.net.wifi.WifiManager::class.java)
+                        ?.connectionInfo?.ssid)
+                val current=fromCaps?:fromManager
+                log("Wi-Fi reuse probe ssidCaps="+fromCaps+" ssidMgr="+fromManager+" want="+b.ssid+" security="+b.security)
                 val properties=cm.getLinkProperties(active)
-                if(!current.isNullOrEmpty()&&current==b.ssid&&properties!=null&&
+                // 无定位权限时 SSID 常为 null；security=0（同网 handoff）仍应复用当前 Wi-Fi，
+                // 否则会用 open specifier 去碰企业网并卡死到 WIFI deadline。
+                val ssidMatched=!current.isNullOrEmpty()&&current==b.ssid
+                val sameLanOpen=b.security==0&&current==null
+                if((ssidMatched||sameLanOpen)&&properties!=null&&
                     NetworkLinkReadiness.isReady(properties.interfaceName,properties.linkAddresses.map{it.address})){
+                    if(sameLanOpen)log("Wi-Fi reuse without SSID visibility; security=0 same-LAN handoff")
                     val monitoring=java.util.concurrent.atomic.AtomicBoolean(true)
                     val monitor=object:ConnectivityManager.NetworkCallback(){
                         override fun onLost(network:Network){if(monitoring.get()&&!stopped.get()&&network==active)onFailure(java.io.IOException("Reused Wi-Fi lease lost"))}

@@ -23,11 +23,12 @@ class ScreenResourceModes {
         if(requests.size!=1)return null
         val r=requests.single() as? Map<*,*>?:return null
         // 接收端在 /info 的 modes 里用一组约束声明资源能力，回 changeModes 时会原样带上这几个字段。
-        // 无条件那一档放行；带条件的请求当前不评估，交回拒绝。
         if(r.keys.any{it !in setOf("resourceID","transferType","transferPriority","takeConstraint","borrowConstraint","unborrowConstraint")})return null
         fun integer(v:Any?):Int? {val n=v as? Number?:return null;val d=n.toDouble();if(!d.isFinite()||d!=n.toInt().toDouble())return null;return n.toInt()}
-        if(listOf("transferPriority","takeConstraint","borrowConstraint","unborrowConstraint").any{r.containsKey(it)&&integer(r[it])!=UNCONDITIONAL})return null
         val resource=integer(r["resourceID"])?:return null;val transfer=integer(r["transferType"])?:return null
+        // TAKE/GIVE 是无条件的所有权转移，约束值不改变结果；借用/归还要评估条件，只接受无条件那一档。
+        // 实测车机取主音频时带的是 transferPriority/takeConstraint=500，拿 100 卡它会把整个请求拒掉。
+        if(transfer>2&&listOf("transferPriority","takeConstraint","borrowConstraint","unborrowConstraint").any{r.containsKey(it)&&integer(r[it])!=UNCONDITIONAL})return null
         if(resource==1)return when(transfer){
             1->if(state.borrowed)null else state.copy(owner=2,permanent=2,borrowed=false)
             2->if(state.borrowed)null else state.copy(owner=1,permanent=1,borrowed=false)

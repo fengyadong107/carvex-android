@@ -335,9 +335,18 @@ class AirSession(private val context:Context,private val path:NetworkPath,privat
             runBlocking{withTimeout(25000){published.await()}}
             cached
         }?:runBlocking{withTimeout(25000){
-            published.await()
-            log("Startup: publication ready; awaiting receiver metadata")
-            val result=Channel<Result<ReceiverMetadata>>(1)
+            // NSD registerService 在部分 OEM/企业网上会既不成功也不失败；
+            // 0x4301 已带 AirPlay 地址时不能卡死在 published 上。
+            val publicationReady=withTimeoutOrNull(3_000){published.await();true}?:false
+            if(publicationReady)log("Startup: publication ready; awaiting receiver metadata")
+            else log("Startup: control publication pending; continuing with 0x4301 endpoint")
+            if(bootstrap.endpoint!=null){
+                // 公司网常拦跨 VLAN 组播：Bonjour/invitation 可有可无，直接走 iAP 端点。
+                discovery?.let{resources.release(it)}
+                log("Startup: using the 0x4301 AirPlay endpoint without waiting for Bonjour/invitation")
+                ReceiverMetadata(null,bootstrap.publicKey,null,endpoint=address)
+            }else{
+            val result=Channel<Result<ReceiverMetadata>>(Channel.BUFFERED)
             val discoveryJob=launch {
                 try {
                     val found=requireNotNull(discovery).await()
@@ -388,6 +397,7 @@ class AirSession(private val context:Context,private val path:NetworkPath,privat
                 discoveryJob.cancel()
                 result.close()
                 discovery?.let{resources.release(it)}
+            }
             }
         }}}catch(t:TimeoutCancellationException){
             // Local stage deadline is a connection failure, not user coroutine cancellation.
